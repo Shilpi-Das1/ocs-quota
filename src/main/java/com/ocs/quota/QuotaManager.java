@@ -70,7 +70,7 @@ public class QuotaManager {
      */
     public double utilisationPct() {
         long totalUsed = usageBytes.values().stream().mapToLong(Long::longValue).sum();
-        return totalUsed / limitBytes * 100;        // BUG: integer division truncates
+        return (double) totalUsed * 100.0 / limitBytes;
     }
 
     public QuotaLimit snapshot(String namespace) {
