@@ -1,0 +1,144 @@
+name: OCS Quota CI
+
+on:
+  push:
+    branches: ["main", "feature/**", "fix/**", "log-analyser/**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:   # allow manual trigger from the Actions tab
+
+jobs:
+  # ── Python / pytest ─────────────────────────────────────────────────────────
+  pytest:
+    name: Python tests (pytest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pytest
+        # Continue so the upload step always runs, even on failure.
+        continue-on-error: true
+        run: |
+          pytest tests/ -v --tb=short 2>&1 | tee pytest-output.log
+          echo "PYTEST_EXIT=$?" >> "$GITHUB_ENV"
+
+      - name: Upload pytest log
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log
+          path: pytest-output.log
+          # Retain for 30 days so the log analyser can download it.
+          retention-days: 30
+
+      - name: Fail job if pytest failed
+        if: env.PYTEST_EXIT != '0'
+        run: exit 1
+
+  # ── Java / Maven ─────────────────────────────────────────────────────────────
+  maven:
+    name: Java tests (Maven / JUnit 5)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Run Maven tests
+        # continue-on-error so the report upload always runs.
+        continue-on-error: true
+        run: |
+          mvn --batch-mode test 2>&1 | tee maven-output.log
+          echo "MVN_EXIT=$?" >> "$GITHUB_ENV"
+        working-directory: .   # pom.xml is at the project root
+
+      - name: Upload Maven console log
+        uses: actions/upload-artifact@v4
+        with:
+          name: maven-log
+          path: maven-output.log
+          retention-days: 30
+
+      - name: Upload Surefire XML reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          # Maven Surefire writes one XML per test class here.
+          path: target/surefire-reports/*.xml
+          retention-days: 30
+
+      - name: Fail job if Maven failed
+        if: env.MVN_EXIT != '0'
+        run: exit 1
+
+  # ── Go ───────────────────────────────────────────────────────────────────────
+  go:
+    name: Go tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Run Go tests
+        continue-on-error: true
+        run: |
+          go test ./quota_go/... -v 2>&1 | tee go-test-output.log
+          echo "GO_EXIT=$?" >> "$GITHUB_ENV"
+        working-directory: .
+
+      - name: Upload Go test log
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-test-log
+          path: go-test-output.log
+          retention-days: 30
+
+      - name: Fail job if Go tests failed
+        if: env.GO_EXIT != '0'
+        run: exit 1
+
+  # ── Notify log-analyser (optional) ───────────────────────────────────────────
+  # Uncomment and fill in your log-analyser URL + project name to trigger
+  # automatic triage after every failing run.
+  #
+  # notify-log-analyser:
+  #   name: Trigger log analyser
+  #   runs-on: ubuntu-latest
+  #   needs: [pytest, maven, go]
+  #   if: failure()
+  #   steps:
+  #     - name: Download all logs
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         path: ci-logs
+  #
+  #     - name: Post logs to log-analyser
+  #       env:
+  #         LOG_ANALYSER_URL: ${{ secrets.LOG_ANALYSER_URL }}
+  #       run: |
+  #         for f in ci-logs/**/*.log ci-logs/**/*.xml; do
+  #           [ -f "$f" ] || continue
+  #           curl -sS -X POST "$LOG_ANALYSER_URL/api/submit" \
+  #             -F "project=ocs-quota" \
+  #             -F "log=@$f" \
+  #             -F "name=$(basename $f)"
+  #         done
