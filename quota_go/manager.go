@@ -100,5 +100,8 @@ func (m *Manager) UtilisationPct() float64 {
 	for _, b := range m.usage {
 		total += b
 	}
-	return float64(total / m.limitBytes * 100) // BUG: integer division truncates
+	if m.limitBytes == 0 {
+		return 0
+	}
+	return float64(total) / float64(m.limitBytes) * 100
 }
