@@ -116,29 +116,29 @@ jobs:
         if: env.GO_EXIT != '0'
         run: exit 1
 
-  # ── Notify log-analyser (optional) ───────────────────────────────────────────
-  # Uncomment and fill in your log-analyser URL + project name to trigger
-  # automatic triage after every failing run.
-  #
-  # notify-log-analyser:
-  #   name: Trigger log analyser
-  #   runs-on: ubuntu-latest
-  #   needs: [pytest, maven, go]
-  #   if: failure()
-  #   steps:
-  #     - name: Download all logs
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         path: ci-logs
-  #
-  #     - name: Post logs to log-analyser
-  #       env:
-  #         LOG_ANALYSER_URL: ${{ secrets.LOG_ANALYSER_URL }}
-  #       run: |
-  #         for f in ci-logs/**/*.log ci-logs/**/*.xml; do
-  #           [ -f "$f" ] || continue
-  #           curl -sS -X POST "$LOG_ANALYSER_URL/api/submit" \
-  #             -F "project=ocs-quota" \
-  #             -F "log=@$f" \
-  #             -F "name=$(basename $f)"
-  #         done
+  # ── Notify log-analyser ──────────────────────────────────────────────────────
+  # Requires the LOG_ANALYSER_URL repository secret (Settings > Secrets and
+  # variables > Actions) pointing at a log-analyser reachable from GitHub-hosted
+  # runners (e.g. https://your-host:5000). Posts every log/XML artifact to
+  # /api/runs after a failing run; the format is auto-detected.
+  notify-log-analyser:
+    name: Trigger log analyser
+    runs-on: ubuntu-latest
+    needs: [pytest, maven, go]
+    if: failure()
+    steps:
+      - name: Download all logs
+        uses: actions/download-artifact@v4
+        with:
+          path: ci-logs
+
+      - name: Post logs to log-analyser
+        env:
+          LOG_ANALYSER_URL: ${{ secrets.LOG_ANALYSER_URL }}
+        run: |
+          for f in ci-logs/**/*.log ci-logs/**/*.xml; do
+            [ -f "$f" ] || continue
+            curl -sS --fail-with-body -X POST "$LOG_ANALYSER_URL/api/runs" \
+              -F "project=ocs-quota" \
+              -F "file=@$f"
+          done
