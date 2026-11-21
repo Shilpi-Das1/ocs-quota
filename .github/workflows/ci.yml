@@ -29,7 +29,7 @@ jobs:
         continue-on-error: true
         run: |
           pytest tests/ -v --tb=short 2>&1 | tee pytest-output.log
-          echo "PYTEST_EXIT=$?" >> "$GITHUB_ENV"
+          echo "PYTEST_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
 
       - name: Upload pytest log
         uses: actions/upload-artifact@v4
@@ -63,7 +63,7 @@ jobs:
         continue-on-error: true
         run: |
           mvn --batch-mode test 2>&1 | tee maven-output.log
-          echo "MVN_EXIT=$?" >> "$GITHUB_ENV"
+          echo "MVN_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
         working-directory: .   # pom.xml is at the project root
 
       - name: Upload Maven console log
@@ -102,7 +102,7 @@ jobs:
         continue-on-error: true
         run: |
           go test ./quota_go/... -v 2>&1 | tee go-test-output.log
-          echo "GO_EXIT=$?" >> "$GITHUB_ENV"
+          echo "GO_EXIT=${PIPESTATUS[0]}" >> "$GITHUB_ENV"
         working-directory: .
 
       - name: Upload Go test log
@@ -117,13 +117,14 @@ jobs:
         run: exit 1
 
   # ── Notify log-analyser ──────────────────────────────────────────────────────
-  # Requires the LOG_ANALYSER_URL repository secret (Settings > Secrets and
-  # variables > Actions) pointing at a log-analyser reachable from GitHub-hosted
-  # runners (e.g. https://your-host:5000). Posts every log/XML artifact to
-  # /api/runs after a failing run; the format is auto-detected.
+  # Runs on a SELF-HOSTED WINDOWS runner installed on the machine that also runs
+  # the log-analyser (python app.py -> http://localhost:5000). The test jobs above
+  # run on GitHub-hosted runners; only this job runs locally, so it can reach
+  # localhost. The runner must be online (run.cmd) when the workflow executes.
+  # LOG_ANALYSER_URL (repository secret) is optional and overrides the default.
   notify-log-analyser:
     name: Trigger log analyser
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [pytest, maven, go]
     if: failure()
     steps:
@@ -133,12 +134,18 @@ jobs:
           path: ci-logs
 
       - name: Post logs to log-analyser
+        shell: powershell
         env:
-          LOG_ANALYSER_URL: ${{ secrets.LOG_ANALYSER_URL }}
+          LOG_ANALYSER_URL: ${{ secrets.LOG_ANALYSER_URL || 'http://localhost:5000' }}
         run: |
-          for f in ci-logs/**/*.log ci-logs/**/*.xml; do
-            [ -f "$f" ] || continue
-            curl -sS --fail-with-body -X POST "$LOG_ANALYSER_URL/api/runs" \
-              -F "project=ocs-quota" \
-              -F "file=@$f"
-          done
+          $base = $env:LOG_ANALYSER_URL.TrimEnd('/')
+          $files = Get-ChildItem -Path ci-logs -Recurse -File -Include *.log, *.xml
+          if (-not $files) { Write-Host "No log files found in ci-logs"; exit 0 }
+          $failed = 0
+          foreach ($f in $files) {
+            Write-Host "Posting $($f.FullName) to $base/api/runs"
+            curl.exe -sS --fail-with-body -X POST "$base/api/runs" -F "project=ocs-quota" -F "file=@$($f.FullName)"
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::Post failed for $($f.Name)"; $failed = 1 }
+            Write-Host ""
+          }
+          exit $failed
