@@ -51,8 +51,7 @@ class QuotaManager:
     def utilisation_pct(self) -> float:
         """Return overall utilisation as a percentage (0-100)."""
         total = sum(self._usage.values())
-        # BUG: integer division truncates; should be: total * 100 / self.limit_bytes
-        return total // (self.limit_bytes / 100)
+        return total * 100 / self.limit_bytes
 
     def report(self, as_of: datetime.date | None = None) -> dict:
         as_of = as_of or datetime.date.today()
