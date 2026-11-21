@@ -35,7 +35,7 @@ public class QuotaManager {
      */
     public void addUsage(String namespace, double gib) {
         long bytes = (long) (gib * 1024L * 1024L * 1024L);
-        usageBytes.put(namespace, bytes);           // BUG: overwrites, does not accumulate
+        usageBytes.merge(namespace, bytes, Long::sum);
     }
 
     public double getUsageGib(String namespace) {
@@ -70,7 +70,7 @@ public class QuotaManager {
      */
     public double utilisationPct() {
         long totalUsed = usageBytes.values().stream().mapToLong(Long::longValue).sum();
-        return totalUsed / limitBytes * 100;        // BUG: integer division truncates
+        return (double) totalUsed / limitBytes * 100.0;
     }
 
     public QuotaLimit snapshot(String namespace) {
