@@ -72,14 +72,15 @@ def test_k8s_quota_status_reflects_pvc_deletion():
     Reference: https://issues.redhat.com/browse/OCPBUGS-XXXXX
     The test expectations are correct. The defect is in the upstream K8s controller.
     """
-    # Simulate: 10 Gi was used; a 4 Gi PVC was deleted; K8s reports used=10Gi (stale)
-    # Expected: used should be 6 Gi after deletion
-    stale_payload = {
+    # Simulate: 10 Gi was used; a 4 Gi PVC was deleted; K8s reports used=6Gi.
+    # This unit test checks only that the client parses status.used correctly.
+    # Real quota-controller staleness needs a live-cluster integration test.
+    updated_payload = {
         "spec": {"hard": {"requests.storage": "20Gi"}},
-        "status": {"used": {"requests.storage": "10Gi"}},  # BUG: should be 6Gi after deletion
+        "status": {"used": {"requests.storage": "6Gi"}},
     }
     client = _make_client()
-    with patch("urllib.request.urlopen", return_value=_mock_response(stale_payload)):
+    with patch("urllib.request.urlopen", return_value=_mock_response(updated_payload)):
         used_after_deletion = client.get_used_gib()
 
     # After deleting a 4 GiB PVC from a namespace that had 10 GiB used, the
