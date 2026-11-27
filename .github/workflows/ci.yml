@@ -2,7 +2,8 @@ name: OCS Quota CI
 
 on:
   push:
-    branches: ["main", "feature/**", "fix/**", "log-analyser/**"]
+    # log-analyser/** is deliberately NOT listed: those fix branches are verified by rerun.yml only.
+    branches: ["main", "feature/**", "fix/**"]
   pull_request:
     branches: ["main"]
   workflow_dispatch:   # allow manual trigger from the Actions tab
@@ -137,6 +138,12 @@ jobs:
         shell: powershell
         env:
           LOG_ANALYSER_URL: ${{ secrets.LOG_ANALYSER_URL || 'http://localhost:5000' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          WORKFLOW: ${{ github.workflow }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
         run: |
           $base = $env:LOG_ANALYSER_URL.TrimEnd('/')
           $files = Get-ChildItem -Path ci-logs -Recurse -File -Include *.log, *.xml
@@ -144,7 +151,12 @@ jobs:
           $failed = 0
           foreach ($f in $files) {
             Write-Host "Posting $($f.FullName) to $base/api/runs"
-            curl.exe -sS --fail-with-body -X POST "$base/api/runs" -F "project=ocs-quota" -F "file=@$($f.FullName)"
+            # source=github_actions marks the run as CI-originated; the analyser adds the date/time to the name
+            curl.exe -sS --fail-with-body -X POST "$base/api/runs" `
+              -F "project=ocs-quota" -F "source=github_actions" `
+              -F "run_url=$env:RUN_URL" -F "run_number=$env:RUN_NUMBER" -F "workflow=$env:WORKFLOW" `
+              -F "branch=$env:BRANCH" -F "sha=$env:SHA" -F "repo=$env:REPO" `
+              -F "artifact=$($f.Directory.Name)" -F "file=@$($f.FullName)"
             if ($LASTEXITCODE -ne 0) { Write-Host "::error::Post failed for $($f.Name)"; $failed = 1 }
             Write-Host ""
           }

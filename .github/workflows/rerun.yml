@@ -1,0 +1,98 @@
+name: Log Analyser rerun
+
+# Dispatched by the log analyser on a log-analyser/fix-* branch to verify a patch.
+# It reruns ONE test (pytest, Maven/JUnit or Go, chosen from the test id) and uploads a single
+# log file as the artifact "rerun-log". No secrets, read-only token: this runs generated code.
+# Must be merged to the default branch once, otherwise GitHub does not offer workflow_dispatch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_id:
+        description: "Test id exactly as the analyser shows it"
+        required: true
+      case_id:
+        description: "Log analyser case (informational)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  rerun:
+    name: Rerun one test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Never interpolate inputs into the script: the test id comes from a log file.
+      TEST_ID: ${{ inputs.test_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate test id and pick the test runner
+        id: kind
+        shell: bash
+        run: |
+          re='^[][A-Za-z0-9_./: ,=+-]{1,200}$'
+          if ! [[ "$TEST_ID" =~ $re ]]; then
+            echo "::error::test_id contains characters that are not allowed"; exit 2
+          fi
+          if [[ "$TEST_ID" == *"::"* ]]; then kind=pytest
+          elif [[ "$TEST_ID" =~ ^Test[A-Za-z0-9_]*(/.*)?$ ]]; then kind=go
+          elif [[ "$TEST_ID" =~ ^[A-Za-z_][A-Za-z0-9_.]*\.[A-Za-z_][A-Za-z0-9_]*$ ]]; then kind=java
+          else echo "::error::cannot tell which runner to use for '$TEST_ID'"; exit 2
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          mkdir rerun-out
+
+      - uses: actions/setup-python@v5
+        if: steps.kind.outputs.kind == 'pytest'
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        if: steps.kind.outputs.kind == 'java'
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+      - uses: actions/setup-go@v5
+        if: steps.kind.outputs.kind == 'go'
+        with:
+          go-version: "1.21"
+
+      - name: Run the test
+        id: run
+        shell: bash
+        run: |
+          set +e
+          case "${{ steps.kind.outputs.kind }}" in
+            pytest)
+              pip install -r requirements.txt
+              pytest "$TEST_ID" -v --tb=short 2>&1 | tee rerun-out/rerun.log
+              rc=${PIPESTATUS[0]} ;;
+            java)
+              # The Surefire XML lists passed tests too; the console log does not, so prefer the XML.
+              mvn --batch-mode test -Dtest="${TEST_ID%.*}#${TEST_ID##*.}" \
+                  -Dsurefire.failIfNoSpecifiedTests=false 2>&1 | tee rerun-out/rerun.log
+              rc=${PIPESTATUS[0]}
+              xml=$(ls target/surefire-reports/TEST-*.xml 2>/dev/null | head -n 1)
+              if [ -n "$xml" ]; then cp "$xml" rerun-out/rerun.xml; rm rerun-out/rerun.log; fi ;;
+            go)
+              pattern=$(echo "$TEST_ID" | awk -F/ '{for(i=1;i<=NF;i++) printf "%s^%s$", (i>1?"/":""), $i}')
+              go test ./quota_go/... -run "$pattern" -v 2>&1 | tee rerun-out/rerun.log
+              rc=${PIPESTATUS[0]} ;;
+          esac
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rerun-log
+          path: rerun-out/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Show a failing rerun as a red job
+        if: steps.run.outputs.rc != '0'
+        run: exit 1
